@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type uploadJob struct {
@@ -31,6 +32,7 @@ func main() {
 		bucket       string
 		prefix       string
 		cacheControl string
+		publicRead   bool
 		dryRun       bool
 		verbose      bool
 		concurrency  int
@@ -40,6 +42,7 @@ func main() {
 	flag.StringVar(&bucket, "bucket", "", "S3 bucket name")
 	flag.StringVar(&prefix, "prefix", "", "S3 key prefix (optional)")
 	flag.StringVar(&cacheControl, "cache-control", "", "Cache-Control header value")
+	flag.BoolVar(&publicRead, "public-read", false, "Set ACL to public-read")
 	flag.BoolVar(&dryRun, "dry-run", false, "Show what would be uploaded without uploading")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
 	flag.IntVar(&concurrency, "concurrency", 10, "Number of concurrent uploads")
@@ -122,7 +125,7 @@ func main() {
 					fmt.Printf("UPLOAD %s\n", job.relPath)
 				}
 
-				if err := uploadFile(ctx, client, bucket, job.s3Key, job.path, cacheControl); err != nil {
+				if err := uploadFile(ctx, client, bucket, job.s3Key, job.path, cacheControl, publicRead); err != nil {
 					fmt.Fprintf(os.Stderr, "Error uploading %s: %v\n", job.path, err)
 					errors.Add(1)
 					continue
@@ -223,7 +226,7 @@ func checkNeedsUpload(ctx context.Context, client *s3.Client, bucket, key, local
 	return false, ""
 }
 
-func uploadFile(ctx context.Context, client *s3.Client, bucket, key, path, cacheControl string) error {
+func uploadFile(ctx context.Context, client *s3.Client, bucket, key, path, cacheControl string, publicRead bool) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -242,6 +245,10 @@ func uploadFile(ctx context.Context, client *s3.Client, bucket, key, path, cache
 
 	if cacheControl != "" {
 		input.CacheControl = aws.String(cacheControl)
+	}
+
+	if publicRead {
+		input.ACL = types.ObjectCannedACLPublicRead
 	}
 
 	_, err = client.PutObject(ctx, input)

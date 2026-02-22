@@ -202,3 +202,229 @@ func TestContentType(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckNeedsUpload_NilETag(t *testing.T) {
+	mock := &mockS3Client{
+		headObjectFunc: func(ctx context.Context, input *s3.HeadObjectInput, opts ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+			return &s3.HeadObjectOutput{ETag: nil}, nil
+		},
+	}
+
+	needsUpload, reason := checkNeedsUploadWithClient(context.Background(), mock, "bucket", "key", "abc123")
+	if !needsUpload {
+		t.Error("expected needsUpload=true for nil etag")
+	}
+	if reason != "no etag" {
+		t.Errorf("reason = %q, want %q", reason, "no etag")
+	}
+}
+
+func TestComputeMD5_LargeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.bin")
+
+	// 1MB file
+	content := make([]byte, 1024*1024)
+	for i := range content {
+		content[i] = byte(i % 256)
+	}
+
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := computeMD5(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := md5.Sum(content)
+	want := hex.EncodeToString(h[:])
+
+	if got != want {
+		t.Errorf("computeMD5() = %q, want %q", got, want)
+	}
+}
+
+func TestS3KeyGeneration(t *testing.T) {
+	tests := []struct {
+		name    string
+		relPath string
+		prefix  string
+		want    string
+	}{
+		{"no prefix", "file.txt", "", "file.txt"},
+		{"with prefix", "file.txt", "static", "static/file.txt"},
+		{"prefix with slash", "file.txt", "static/", "static/file.txt"},
+		{"nested path", "dir/subdir/file.txt", "assets", "assets/dir/subdir/file.txt"},
+		{"no prefix nested", "dir/file.txt", "", "dir/file.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s3Key := filepath.ToSlash(tt.relPath)
+			if tt.prefix != "" {
+				s3Key = strings.TrimSuffix(tt.prefix, "/") + "/" + s3Key
+			}
+			if s3Key != tt.want {
+				t.Errorf("s3Key = %q, want %q", s3Key, tt.want)
+			}
+		})
+	}
+}
+
+func TestUploadFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.html")
+
+	if err := os.WriteFile(path, []byte("<html></html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedInput *s3.PutObjectInput
+	mock := &mockS3Client{
+		putObjectFunc: func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+			capturedInput = input
+			return &s3.PutObjectOutput{}, nil
+		},
+	}
+
+	err := uploadFileWithClient(context.Background(), mock, "test-bucket", "test.html", path, "max-age=3600", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if *capturedInput.Bucket != "test-bucket" {
+		t.Errorf("bucket = %q, want %q", *capturedInput.Bucket, "test-bucket")
+	}
+	if *capturedInput.Key != "test.html" {
+		t.Errorf("key = %q, want %q", *capturedInput.Key, "test.html")
+	}
+	if *capturedInput.CacheControl != "max-age=3600" {
+		t.Errorf("cache-control = %q, want %q", *capturedInput.CacheControl, "max-age=3600")
+	}
+	if capturedInput.ContentType == nil || !strings.HasPrefix(*capturedInput.ContentType, "text/html") {
+		t.Errorf("content-type = %v, want text/html", capturedInput.ContentType)
+	}
+}
+
+func TestUploadFile_PublicRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+
+	if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedInput *s3.PutObjectInput
+	mock := &mockS3Client{
+		putObjectFunc: func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+			capturedInput = input
+			return &s3.PutObjectOutput{}, nil
+		},
+	}
+
+	err := uploadFileWithClient(context.Background(), mock, "bucket", "key", path, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capturedInput.ACL != "public-read" {
+		t.Errorf("ACL = %q, want %q", capturedInput.ACL, "public-read")
+	}
+}
+
+func TestUploadFile_NoPublicRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+
+	if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedInput *s3.PutObjectInput
+	mock := &mockS3Client{
+		putObjectFunc: func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+			capturedInput = input
+			return &s3.PutObjectOutput{}, nil
+		},
+	}
+
+	err := uploadFileWithClient(context.Background(), mock, "bucket", "key", path, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capturedInput.ACL != "" {
+		t.Errorf("ACL = %q, want empty", capturedInput.ACL)
+	}
+}
+
+func TestUploadFile_NoCacheControl(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+
+	if err := os.WriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedInput *s3.PutObjectInput
+	mock := &mockS3Client{
+		putObjectFunc: func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+			capturedInput = input
+			return &s3.PutObjectOutput{}, nil
+		},
+	}
+
+	err := uploadFileWithClient(context.Background(), mock, "bucket", "key", path, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capturedInput.CacheControl != nil {
+		t.Errorf("CacheControl = %q, want nil", *capturedInput.CacheControl)
+	}
+}
+
+func TestUploadFile_FileNotFound(t *testing.T) {
+	mock := &mockS3Client{
+		putObjectFunc: func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+			return &s3.PutObjectOutput{}, nil
+		},
+	}
+
+	err := uploadFileWithClient(context.Background(), mock, "bucket", "key", "/nonexistent/file.txt", "", false)
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+// Helper for testing uploadFile with mock client
+func uploadFileWithClient(ctx context.Context, client S3Client, bucket, key, path, cacheControl string, publicRead bool) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	input := &s3.PutObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+		Body:   f,
+	}
+
+	if ct := mime.TypeByExtension(filepath.Ext(path)); ct != "" {
+		input.ContentType = &ct
+	}
+
+	if cacheControl != "" {
+		input.CacheControl = &cacheControl
+	}
+
+	if publicRead {
+		input.ACL = "public-read"
+	}
+
+	_, err = client.PutObject(ctx, input)
+	return err
+}
