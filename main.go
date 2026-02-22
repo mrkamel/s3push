@@ -33,6 +33,7 @@ func main() {
 		prefix       string
 		cacheControl string
 		publicRead   bool
+		force        bool
 		dryRun       bool
 		verbose      bool
 		concurrency  int
@@ -43,6 +44,7 @@ func main() {
 	flag.StringVar(&prefix, "prefix", "", "S3 key prefix (optional)")
 	flag.StringVar(&cacheControl, "cache-control", "", "Cache-Control header value")
 	flag.BoolVar(&publicRead, "public-read", false, "Set ACL to public-read")
+	flag.BoolVar(&force, "force", false, "Upload all files even if unchanged")
 	flag.BoolVar(&dryRun, "dry-run", false, "Show what would be uploaded without uploading")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose output")
 	flag.IntVar(&concurrency, "concurrency", 10, "Number of concurrent uploads")
@@ -96,14 +98,22 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				localMD5, err := computeMD5(job.path)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error computing MD5 for %s: %v\n", job.path, err)
-					errors.Add(1)
-					continue
-				}
+				var needsUpload bool
+				var reason string
 
-				needsUpload, reason := checkNeedsUpload(ctx, client, bucket, job.s3Key, localMD5)
+				if force {
+					needsUpload = true
+					reason = "forced"
+				} else {
+					localMD5, err := computeMD5(job.path)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error computing MD5 for %s: %v\n", job.path, err)
+						errors.Add(1)
+						continue
+					}
+
+					needsUpload, reason = checkNeedsUpload(ctx, client, bucket, job.s3Key, localMD5)
+				}
 
 				if !needsUpload {
 					if verbose {

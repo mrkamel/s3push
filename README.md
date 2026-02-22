@@ -28,6 +28,8 @@ s3push -src <directory> -bucket <bucket> [options]
 | `-bucket` | S3 bucket name | (required) |
 | `-prefix` | S3 key prefix | |
 | `-cache-control` | Cache-Control header | |
+| `-public-read` | Set ACL to public-read | false |
+| `-force` | Upload all files even if unchanged | false |
 | `-concurrency` | Number of concurrent uploads | 10 |
 | `-dry-run` | Show what would be uploaded | false |
 | `-verbose` | Verbose output | false |
@@ -46,6 +48,12 @@ s3push -src ./dist -bucket my-bucket -prefix "static/v1"
 
 # Faster uploads
 s3push -src ./dist -bucket my-bucket -concurrency 50
+
+# Force re-upload all files
+s3push -src ./dist -bucket my-bucket -force
+
+# Public bucket with cache headers
+s3push -src ./dist -bucket my-bucket -public-read -cache-control "max-age=86400"
 ```
 
 ## How it works
