@@ -5,7 +5,7 @@ Recursively upload files to S3, skipping files that already exist with matching 
 ## Install
 
 ```bash
-go install github.com/youruser/s3push@latest
+go install github.com/mrkamel/s3push@latest
 ```
 
 Or build from source:
